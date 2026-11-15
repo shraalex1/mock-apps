@@ -1,0 +1,10 @@
+{
+  "name": "shortical-mock-mobile-client",
+  "version": "0.5.0",
+  "description": "Clean-Room Mock Mobile KMP Client (:5395) simulating kmp-billing-wrapper (StoreKit 2 JWS, Play Billing v8, 24h mirror_to_test, restore 409 guard, and offline RC fallback)",
+  "type": "module",
+  "scripts": {
+    "start": "node src/mobileHarness.mjs",
+    "test": "node --test tests/mockMobileClient.test.mjs"
+  }
+}

@@ -1,0 +1,44 @@
+version: '3.9'
+
+# =============================================================================
+# repos/mock-apps/docker-compose.yml
+# Deploys the 3 Clean-Room Mock Apps (server :4470, web :5390, mobile :5395)
+# on a single cloud VM / ECS task alongside or against alt-payments (:4460).
+# =============================================================================
+services:
+  mock-server:
+    image: golang:1.23-alpine
+    working_dir: /workspace/server
+    volumes:
+      - ./server:/workspace/server
+    environment:
+      - APP_ENV=dev
+      - MOCK_API_PORT=4470
+      - BILLING_GATEWAY_URL=${BILLING_GATEWAY_URL:-http://localhost:4460}
+      - S2S_HMAC_SECRET_CURRENT=${S2S_HMAC_SECRET_CURRENT:-dev_s2s_hmac_secret_shortical_2026_primary}
+    ports:
+      - "4470:4470"
+    command: ["go", "run", "./src/cmd/harness"]
+
+  mock-web:
+    image: node:24-alpine
+    working_dir: /workspace/web
+    volumes:
+      - ./web:/workspace/web
+    environment:
+      - MOCK_STOREFRONT_PORT=5390
+      - BILLING_GATEWAY_URL=${BILLING_GATEWAY_URL:-http://localhost:4460}
+      - MOCK_API_SERVICE_URL=${MOCK_API_SERVICE_URL:-http://localhost:4470}
+    ports:
+      - "5390:5390"
+    command: ["node", "src/server.mjs"]
+
+  mock-mobile:
+    image: node:24-alpine
+    working_dir: /workspace/mobile
+    volumes:
+      - ./mobile:/workspace/mobile
+    environment:
+      - BILLING_GATEWAY_URL=${BILLING_GATEWAY_URL:-http://localhost:4460}
+      - MOCK_API_SERVICE_URL=${MOCK_API_SERVICE_URL:-http://localhost:4470}
+    command: ["node", "--test", "tests/mockMobileClient.test.mjs"]

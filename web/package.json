@@ -1,0 +1,10 @@
+{
+  "name": "shortical-mock-web-client",
+  "version": "0.5.0",
+  "description": "Clean-Room Mock Web Storefront (:5390) demonstrating @shortical/web-billing-sdk, Shortical/OneMore Stripe & Paddle fallback, 20s episode-unlock polling, and attachWebPurchase",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.mjs",
+    "test": "node --test tests/mockWebClient.test.mjs"
+  }
+}

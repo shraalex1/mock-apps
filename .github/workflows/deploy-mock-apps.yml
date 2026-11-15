@@ -1,0 +1,93 @@
+name: CI & Cloud Deploy — Clean-Room Mock Apps (server, web, mobile)
+
+# Tests run on every listed branch. Mobile stays off ECS.
+# Deploy is a separate job and does not use a GitHub Environment.
+# dev-ex pushes shortical-mock-server and shortical-mock-web to the Entlora
+# account (AWS_ENTLORA_*). dev does the same for Shortical's account
+# (AWS_SHORTICAL_*) once AWS_SHORTICAL_REGION is set. Until then a push to
+# dev runs tests and skips the deploy. main is tests only.
+# The images do not contain the env files. ECS receives the URLs at task start.
+
+on:
+  push:
+    branches:
+      - dev-ex
+      - dev
+      - main
+  workflow_dispatch:
+
+jobs:
+  verify:
+    name: Test server, web, and mobile
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout mock-apps monorepo
+        uses: actions/checkout@v4
+
+      - name: Setup Go 1.23 for mock-apps/server (:4470)
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
+      - name: Setup Node.js 24 for mock-apps/web (:5390) & mock-apps/mobile (:5395)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Run Server, Web & Mobile Mock Test Suites
+        run: |
+          cd server && go test -v ./tests/...
+          cd ../web && npm test
+          cd ../mobile && npm test
+
+      - name: Generate Android Sideload APK & iOS Ad-Hoc OTA Manifest
+        run: |
+          bash mobile/scripts/run-on-simulator-or-device.sh ota-manifest
+
+  deploy:
+    name: Push mock images to AWS (${{ github.ref_name }})
+    needs: verify
+    if: github.ref_name == 'dev-ex' || (github.ref_name == 'dev' && vars.AWS_SHORTICAL_REGION != '')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout mock-apps monorepo
+        uses: actions/checkout@v4
+
+      - name: Require repository configuration
+        env:
+          AWS_REGION: ${{ github.ref_name == 'dev-ex' && vars.AWS_ENTLORA_REGION || vars.AWS_SHORTICAL_REGION }}
+        run: |
+          if [ "${{ github.ref_name }}" = "dev-ex" ]; then
+            test -n "$AWS_REGION" || { echo "Set repository variable AWS_ENTLORA_REGION"; exit 1; }
+          else
+            test -n "$AWS_REGION" || { echo "Set repository variable AWS_SHORTICAL_REGION"; exit 1; }
+          fi
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ github.ref_name == 'dev-ex' && secrets.AWS_ENTLORA_ACCESS_KEY_ID || secrets.AWS_SHORTICAL_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ github.ref_name == 'dev-ex' && secrets.AWS_ENTLORA_SECRET_ACCESS_KEY || secrets.AWS_SHORTICAL_SECRET_ACCESS_KEY }}
+          aws-region: ${{ github.ref_name == 'dev-ex' && vars.AWS_ENTLORA_REGION || vars.AWS_SHORTICAL_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push mock-server and mock-web
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build --platform linux/amd64 \
+            -t "$ECR_REGISTRY/shortical-mock-server:$IMAGE_TAG" \
+            -t "$ECR_REGISTRY/shortical-mock-server:dev" \
+            -f server/Dockerfile server
+          docker build --platform linux/amd64 \
+            -t "$ECR_REGISTRY/shortical-mock-web:$IMAGE_TAG" \
+            -t "$ECR_REGISTRY/shortical-mock-web:dev" \
+            -f web/Dockerfile web
+          docker push "$ECR_REGISTRY/shortical-mock-server:$IMAGE_TAG"
+          docker push "$ECR_REGISTRY/shortical-mock-server:dev"
+          docker push "$ECR_REGISTRY/shortical-mock-web:$IMAGE_TAG"
+          docker push "$ECR_REGISTRY/shortical-mock-web:dev"

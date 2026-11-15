@@ -1,0 +1,77 @@
+{
+  "identifier" : "ShorticalStoreKit2SandboxConfiguration",
+  "type" : "local",
+  "version" : 3,
+  "products" : [
+    {
+      "displayPrice" : "4.99",
+      "familyShareable" : false,
+      "internalID" : "coins_100_pack",
+      "localizations" : [
+        {
+          "description" : "100 Consumable Coins Pack",
+          "displayName" : "100 Coins",
+          "locale" : "en_US"
+        }
+      ],
+      "productID" : "com.shortical.coins.100",
+      "referenceName" : "100 Coins Pack",
+      "type" : "Consumable"
+    }
+  ],
+  "subscriptionGroups" : [
+    {
+      "id" : "grp_shortical_vip_and_coins_sub",
+      "localizations" : [],
+      "name" : "Shortical VIP & Coins Subscriptions",
+      "subscriptions" : [
+        {
+          "adHocOffers" : [
+            {
+              "displayPrice" : "4.99",
+              "internalID" : "offer_winback_50",
+              "numberOfPeriods" : 1,
+              "offerID" : "shortical_winback_50pct_wk",
+              "paymentMode" : "payAsYouGo",
+              "referenceName" : "50% Off Win-Back Weekly",
+              "subscriptionPeriod" : "P1W"
+            }
+          ],
+          "displayPrice" : "9.99",
+          "familyShareable" : false,
+          "groupNumber" : 1,
+          "internalID" : "sub_vip_weekly",
+          "localizations" : [],
+          "productID" : "com.shortical.vip.weekly",
+          "recurringSubscriptionPeriod" : "P1W",
+          "referenceName" : "Shortical VIP Weekly",
+          "type" : "RecurringSubscription"
+        },
+        {
+          "adHocOffers" : [],
+          "displayPrice" : "19.99",
+          "familyShareable" : false,
+          "groupNumber" : 1,
+          "internalID" : "sub_coins_gold",
+          "localizations" : [],
+          "productID" : "com.shortical.coins.gold",
+          "recurringSubscriptionPeriod" : "P1W",
+          "referenceName" : "Shortical Coins GOLD Weekly",
+          "type" : "RecurringSubscription"
+        },
+        {
+          "adHocOffers" : [],
+          "displayPrice" : "14.99",
+          "familyShareable" : false,
+          "groupNumber" : 2,
+          "internalID" : "sub_coins_silver",
+          "localizations" : [],
+          "productID" : "com.shortical.coins.silver",
+          "recurringSubscriptionPeriod" : "P1W",
+          "referenceName" : "Shortical Coins SILVER Weekly",
+          "type" : "RecurringSubscription"
+        }
+      ]
+    }
+  ]
+}
