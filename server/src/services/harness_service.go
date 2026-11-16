@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"strconv"
@@ -25,18 +24,23 @@ import (
 // 3. mock-mobile-harness (StoreKit 2 JWS / ASSN v2 / Play v8 / RTDN / KMP Wrapper SDK simulator)
 type HarnessService struct {
 	mu                  sync.RWMutex
+	appEnv              string
 	gatewayURL          string
 	s2sSecret           string
 	appleSigningSecret  string
 	appleBundleID       string
 	googlePackageName   string
 	googleOIDCAudience  string
+	allowedOrigins      []string
+	limiter             *mockRateLimiter
+	httpClient          *http.Client
 	faultConfig         models.WebhookFaultInjectionConfig
 	walletsBySubscriber map[string]models.MockSubscriberWalletState
 }
 
 // NewHarnessService initializes a thread-safe Clean-Room HarnessService.
 func NewHarnessService(gatewayURL, s2sSecret, appleSigningSecret string) *HarnessService {
+	appEnv := strings.ToLower(strings.TrimSpace(os.Getenv("APP_ENV")))
 	if strings.TrimSpace(gatewayURL) == "" {
 		gatewayURL = envOr("BILLING_GATEWAY_URL", "http://localhost:4460")
 	}
@@ -46,13 +50,18 @@ func NewHarnessService(gatewayURL, s2sSecret, appleSigningSecret string) *Harnes
 	if strings.TrimSpace(appleSigningSecret) == "" {
 		appleSigningSecret = envOr("APPLE_OFFER_SIGNING_SECRET", "p8_sand_apple_storekit2_keyid_7721f")
 	}
+	cleanGW := strings.TrimRight(gatewayURL, "/")
 	return &HarnessService{
-		gatewayURL:         strings.TrimRight(gatewayURL, "/"),
+		appEnv:             appEnv,
+		gatewayURL:         cleanGW,
 		s2sSecret:          s2sSecret,
 		appleSigningSecret: appleSigningSecret,
 		appleBundleID:      envOr("APPLE_BUNDLE_ID", "com.shortical.app"),
 		googlePackageName:  envOr("GOOGLE_PACKAGE_NAME", "com.shortical.app"),
-		googleOIDCAudience: envOr("GOOGLE_RTDN_OIDC_AUDIENCE", strings.TrimRight(gatewayURL, "/")+"/api/v1/billing/webhooks/google"),
+		googleOIDCAudience: envOr("GOOGLE_RTDN_OIDC_AUDIENCE", cleanGW+"/api/v1/billing/webhooks/google"),
+		allowedOrigins:     resolveAllowedMockOrigins(cleanGW),
+		limiter:            newMockRateLimiter(60000, 180),
+		httpClient:         newSafeMockHTTPClient(8*time.Second, appEnv),
 		faultConfig: models.WebhookFaultInjectionConfig{
 			Mode: envOr("MOCK_WEBHOOK_RESPONSE_MODE", "always_200_ok"),
 		},
@@ -89,21 +98,20 @@ func (h *HarnessService) GetSubscriberState(subscriberRef string) models.MockSub
 }
 
 // HandleRevenueCatWebhook receives POST /webhooks/revenuecat from alt-payments,
-// applies fault-injection rules (to test the 5-retry exponential backoff), and updates VIP/coin state.
+// verifies constant-time HMAC or Bearer credentials, applies fault-injection rules, and updates VIP/coin state.
 func (h *HarnessService) HandleRevenueCatWebhook(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(r.Body)
+	body, err := readBoundedMockBody(w, r, maxMockWebhookBodyBytes)
 	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
+		w.WriteHeader(http.StatusRequestEntityTooLarge)
+		_, _ = w.Write([]byte(`{"error":"webhook payload exceeds 1MB limit"}`))
 		return
 	}
-	defer r.Body.Close()
 
-	// Verify HMAC or Bearer authorization header
+	now := time.Now().UTC()
 	sig := strings.TrimSpace(r.Header.Get("X-Billing-Signature"))
-	auth := strings.TrimSpace(r.Header.Get("Authorization"))
-	if sig == "" && !strings.HasPrefix(auth, "Bearer ") {
+	if authErr := h.VerifyInboundWebhookAuth(now, r.Method, r.URL.Path, r.Header.Get("X-Billing-Timestamp"), sig, r.Header.Get("Authorization"), body); authErr != nil {
 		w.WriteHeader(http.StatusUnauthorized)
-		_, _ = w.Write([]byte(`{"error":"missing signature or bearer token"}`))
+		_, _ = w.Write([]byte(`{"error":"invalid or missing webhook signature"}`))
 		return
 	}
 
@@ -179,16 +187,19 @@ func (h *HarnessService) HandleRevenueCatWebhook(w http.ResponseWriter, r *http.
 	// When an external RevenueCat cloud webhook arrives directly at mock-api-service (no X-Billing-Signature from PaymentGW),
 	// shadow-forward it to PaymentGW (/api/v1/billing/webhooks/revenuecat) so INVOICE_ISSUANCE (rcbin..., $9.99) & renewals stay 100% synced!
 	if sig == "" && strings.TrimSpace(h.gatewayURL) != "" {
-		go func(raw []byte, gw string) {
-			client := &http.Client{Timeout: 4 * time.Second}
-			fwdReq, fwdErr := http.NewRequest(http.MethodPost, gw+"/api/v1/billing/webhooks/revenuecat", bytes.NewReader(raw))
+		go func(raw []byte, gw, secret string) {
+			fwdPath := "/api/v1/billing/webhooks/revenuecat"
+			fwdReq, fwdErr := http.NewRequest(http.MethodPost, gw+fwdPath, bytes.NewReader(raw))
 			if fwdErr == nil {
+				tsStr := strconv.FormatInt(time.Now().UTC().Unix(), 10)
 				fwdReq.Header.Set("Content-Type", "application/json")
-				if resp, doErr := client.Do(fwdReq); doErr == nil && resp != nil {
+				fwdReq.Header.Set("X-Billing-Timestamp", tsStr)
+				fwdReq.Header.Set("X-Billing-Signature", ComputeS2SSignature(secret, tsStr, http.MethodPost, fwdPath, raw))
+				if resp, doErr := h.httpClient.Do(fwdReq); doErr == nil && resp != nil {
 					_ = resp.Body.Close()
 				}
 			}
-		}(append([]byte(nil), body...), h.gatewayURL)
+		}(append([]byte(nil), body...), h.gatewayURL, h.s2sSecret)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -221,9 +232,9 @@ func (h *HarnessService) lookupWrapperRoute(subRef, brand, platform string) wrap
 		return wrapperDecision{}
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+subRef)
+	req.Header.Set("Authorization", "Bearer "+SignClientBearerJWT(h.s2sSecret, subRef, time.Now().UTC()))
 	req.Header.Set("X-Billing-SDK-Version", "1.4.0")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := h.httpClient.Do(req)
 	if err != nil {
 		return wrapperDecision{}
 	}
@@ -281,8 +292,8 @@ func (h *HarnessService) mirrorCompletedPurchase(subRef, brand, provider, offeri
 		return map[string]any{"status": "mirror_not_sent", "error": err.Error()}
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+subRef)
-	resp, err := http.DefaultClient.Do(req)
+	req.Header.Set("Authorization", "Bearer "+SignClientBearerJWT(h.s2sSecret, subRef, time.Now().UTC()))
+	resp, err := h.httpClient.Do(req)
 	if err != nil {
 		return map[string]any{"status": "mirror_not_sent", "error": err.Error()}
 	}
@@ -391,7 +402,7 @@ func (h *HarnessService) ExecuteS2SScenario(req models.S2SSimulatorRequest) (mod
 	httpReq.Header.Set("X-Billing-Timestamp", tsStr)
 	httpReq.Header.Set("X-Billing-Signature", sig)
 
-	resp, err := http.DefaultClient.Do(httpReq)
+	resp, err := h.httpClient.Do(httpReq)
 	if err != nil {
 		return models.S2SSimulatorResponse{}, err
 	}

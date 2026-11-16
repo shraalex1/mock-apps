@@ -22,3 +22,11 @@ make android-emu   # Verifies on local Android Studio Emulator (adb)
 make usb-device    # Verifies on USB-connected iPhone (devicectl) or Android phone (adb -d)
 make ota-manifest  # Generates private Over-The-Air (itms-services://) manifest.plist & APK link for closed testers
 ```
+
+## 2. Security & OWASP Top 10 Hardening
+
+- **Fail-Closed Cloud Startup:** Outside `APP_ENV=local`, `mock-apps/server` refuses to boot if `S2S_HMAC_SECRET_CURRENT` is unset or uses a `REPLACE_*` placeholder, and configures HTTP socket header/read/write/idle timeouts from env.
+- **Explicit CORS & Hardened Headers:** `mock-apps/server` only reflects origins listed in `CORS_ALLOWED_ORIGINS` (plus configured storefront/gateway origins, and `localhost` only when `APP_ENV=local`), applies HSTS/CSP/`nosniff`/`SAMEORIGIN`, enforces bounded request bodies (`64 KB` JSON / `1 MB` webhooks), and rate-limits by right-most ALB `X-Forwarded-For` IP.
+- **Constant-Time Webhook & Client JWT Crypto:** `POST /webhooks/revenuecat` verifies S2S HMAC (`X-Billing-Timestamp` + `X-Billing-Signature` within `300s`) or constant-time `Authorization: Bearer` secrets. Outbound SDK calls from `server` and `mobile` mint short-lived HS256 Bearer JWTs (`SignClientBearerJWT` / `signClientBearerToken`), and `mobile` restricts `/proxy/gateway/*` strictly to `/api/v1/billing/client/*`.
+- **Non-Root Containers & CI Audits:** Both `server/Dockerfile` (`USER appuser`) and `web/Dockerfile` (`USER node`) run unprivileged, and `.github/workflows/deploy-mock-apps.yml` enforces `permissions: contents: read`, `go vet`, `go test -race`, and `govulncheck` before pushing immutable SHA tags.
+

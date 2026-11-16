@@ -158,7 +158,10 @@ func TestCleanRoomMockHarnessFaultInjectionAndWebhookUnlock(t *testing.T) {
 		AmountCents:   999,
 		Currency:      "USD",
 	})
-	s2sFullRes, _ := http.Post(tsGW.URL+"/api/v1/mock/s2s/trigger", "application/json", bytes.NewReader(s2sFullBody))
+	s2sFullRes, err := http.Post(tsGW.URL+"/api/v1/mock/s2s/trigger", "application/json", bytes.NewReader(s2sFullBody))
+	if err != nil {
+		t.Fatalf("s2sFullRes failed: %v", err)
+	}
 	defer s2sFullRes.Body.Close()
 	var s2sFullOut models.S2SSimulatorResponse
 	_ = json.NewDecoder(s2sFullRes.Body).Decode(&s2sFullOut)
@@ -173,7 +176,10 @@ func TestCleanRoomMockHarnessFaultInjectionAndWebhookUnlock(t *testing.T) {
 		Brand:         "Shortical",
 		Provider:      "stripe",
 	})
-	s2sBrokenRes, _ := http.Post(tsGW.URL+"/api/v1/mock/s2s/trigger", "application/json", bytes.NewReader(s2sBrokenBody))
+	s2sBrokenRes, err := http.Post(tsGW.URL+"/api/v1/mock/s2s/trigger", "application/json", bytes.NewReader(s2sBrokenBody))
+	if err != nil {
+		t.Fatalf("s2sBrokenRes failed: %v", err)
+	}
 	defer s2sBrokenRes.Body.Close()
 	var s2sBrokenOut models.S2SSimulatorResponse
 	_ = json.NewDecoder(s2sBrokenRes.Body).Decode(&s2sBrokenOut)
@@ -188,18 +194,65 @@ func TestCleanRoomMockHarnessFaultInjectionAndWebhookUnlock(t *testing.T) {
 		Provider:      "apple",
 		ProductID:     "com.shortical.coins.gold",
 	})
-	mobRes, _ := http.Post(tsGW.URL+"/api/v1/mock/mobile/simulate", "application/json", bytes.NewReader(mobBody))
+	mobRes, err := http.Post(tsGW.URL+"/api/v1/mock/mobile/simulate", "application/json", bytes.NewReader(mobBody))
+	if err != nil {
+		t.Fatalf("mobRes failed: %v", err)
+	}
 	defer mobRes.Body.Close()
 	if mobRes.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200 OK from mobile harness simulation, got %d", mobRes.StatusCode)
 	}
 
 	// Verify /healthz and /storefront
-	hzRes, _ := http.Get(tsGW.URL + "/healthz")
+	hzRes, err := http.Get(tsGW.URL + "/healthz")
+	if err != nil {
+		t.Fatalf("GET /healthz failed: %v", err)
+	}
 	defer hzRes.Body.Close()
-	sfRes, _ := http.Get(tsGW.URL + "/storefront")
+	sfRes, err := http.Get(tsGW.URL + "/storefront")
+	if err != nil {
+		t.Fatalf("GET /storefront failed: %v", err)
+	}
 	defer sfRes.Body.Close()
 	if hzRes.StatusCode != http.StatusOK || sfRes.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200 OK on /healthz and /storefront, got %d %d", hzRes.StatusCode, sfRes.StatusCode)
+	}
+
+	// OWASP A01/A02/A05: Reject forged webhook signatures/tokens and block arbitrary CORS Origin reflection
+	forgedWhReq, _ := http.NewRequest(http.MethodPost, ts.URL+"/webhooks/revenuecat", bytes.NewReader(rcWebhookPayload))
+	forgedWhReq.Header.Set("Content-Type", "application/json")
+	forgedWhReq.Header.Set("X-Billing-Signature", "forged_nonempty_signature")
+	forgedWhRes, err := http.DefaultClient.Do(forgedWhReq)
+	if err != nil {
+		t.Fatalf("forgedWhReq failed: %v", err)
+	}
+	defer forgedWhRes.Body.Close()
+	if forgedWhRes.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 Unauthorized on forged X-Billing-Signature, got %d", forgedWhRes.StatusCode)
+	}
+
+	forgedBearerReq, _ := http.NewRequest(http.MethodPost, ts.URL+"/webhooks/revenuecat", bytes.NewReader(rcWebhookPayload))
+	forgedBearerReq.Header.Set("Authorization", "Bearer wrong_bearer_secret")
+	forgedBearerRes, err := http.DefaultClient.Do(forgedBearerReq)
+	if err != nil {
+		t.Fatalf("forgedBearerReq failed: %v", err)
+	}
+	defer forgedBearerRes.Body.Close()
+	if forgedBearerRes.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 Unauthorized on wrong Bearer token, got %d", forgedBearerRes.StatusCode)
+	}
+
+	evilCorsReq, _ := http.NewRequest(http.MethodGet, ts.URL+"/healthz", nil)
+	evilCorsReq.Header.Set("Origin", "https://evil-attacker.example")
+	evilCorsRes, err := http.DefaultClient.Do(evilCorsReq)
+	if err != nil {
+		t.Fatalf("evilCorsReq failed: %v", err)
+	}
+	defer evilCorsRes.Body.Close()
+	if gotOrigin := evilCorsRes.Header.Get("Access-Control-Allow-Origin"); gotOrigin != "" {
+		t.Fatalf("expected evil Origin not to be reflected in CORS header, got %q", gotOrigin)
+	}
+	if evilCorsRes.Header.Get("Strict-Transport-Security") == "" || evilCorsRes.Header.Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatalf("expected hardened security headers on mock-server responses")
 	}
 }

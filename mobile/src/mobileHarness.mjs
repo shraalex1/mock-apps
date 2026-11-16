@@ -15,6 +15,23 @@ const GATEWAY_URL = (process.env.BILLING_GATEWAY_URL || 'http://localhost:4460')
 const MOCK_SERVER_URL = (process.env.MOCK_API_SERVICE_URL || 'http://localhost:4470').replace(/\/+$/, '');
 const APPLE_BUNDLE_ID = process.env.APPLE_BUNDLE_ID || 'com.shortical.app';
 const APPLE_SIGNING_SECRET = process.env.APPLE_OFFER_SIGNING_SECRET || 'p8_sand_apple_storekit2_keyid_7721f';
+const S2S_HMAC_SECRET = process.env.S2S_HMAC_SECRET_CURRENT || 'dev_s2s_hmac_secret_shortical_2026_primary';
+const MAX_MOBILE_BODY_BYTES = 65_536;
+
+export function signClientBearerToken(secret, subscriberRef, nowSec = Math.floor(Date.now() / 1000)) {
+  const hB64 = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
+  const pB64 = Buffer.from(
+    JSON.stringify({
+      iss: 'shortical-billing-gateway',
+      sub: String(subscriberRef || '').trim(),
+      iat: nowSec,
+      exp: nowSec + 900,
+    }),
+  ).toString('base64url');
+  const signingInput = `${hB64}.${pB64}`;
+  const sigB64 = crypto.createHmac('sha256', secret).update(signingInput).digest('base64url');
+  return `${signingInput}.${sigB64}`;
+}
 
 export function signStoreKit2JWS(secret, payload) {
   const header = {
@@ -35,12 +52,14 @@ export class KmpBillingClientSimulator {
     mockServerUrl = 'http://localhost:4470',
     brand = 'Shortical',
     contractVersion = '1.4.0',
+    s2sSecret = S2S_HMAC_SECRET,
     fetchImpl = globalThis.fetch.bind(globalThis),
   } = {}) {
     this.gatewayBaseUrl = gatewayBaseUrl.replace(/\/+$/, '');
     this.mockServerUrl = mockServerUrl.replace(/\/+$/, '');
     this.brand = brand;
     this.contractVersion = contractVersion;
+    this.s2sSecret = s2sSecret;
     this.fetchImpl = fetchImpl;
     this.session = {
       mode: 'test',
@@ -59,7 +78,7 @@ export class KmpBillingClientSimulator {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${subscriberRef}`,
+          Authorization: `Bearer ${signClientBearerToken(this.s2sSecret, subscriberRef)}`,
           'X-Billing-SDK-Version': this.contractVersion,
         },
         body: JSON.stringify({
@@ -123,7 +142,7 @@ export class KmpBillingClientSimulator {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${subscriberRef}`,
+        Authorization: `Bearer ${signClientBearerToken(this.s2sSecret, subscriberRef)}`,
       },
       body: JSON.stringify({
         subscriber_ref: subscriberRef,
@@ -145,7 +164,7 @@ export class KmpBillingClientSimulator {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${subscriberRef}`,
+        Authorization: `Bearer ${signClientBearerToken(this.s2sSecret, subscriberRef)}`,
       },
       body: JSON.stringify({
         subscriber_ref: subscriberRef,
@@ -214,7 +233,7 @@ export class KmpBillingClientSimulator {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${subscriberRef}`,
+        Authorization: `Bearer ${signClientBearerToken(this.s2sSecret, subscriberRef)}`,
       },
       body: JSON.stringify(verifyPayload),
     });
@@ -228,13 +247,38 @@ export class KmpBillingClientSimulator {
   }
 }
 
-function readReqBody(req) {
-  return new Promise((resolve) => {
+function readReqBody(req, maxBytes = MAX_MOBILE_BODY_BYTES) {
+  return new Promise((resolve, reject) => {
     const chunks = [];
-    req.on('data', (c) => chunks.push(c));
+    let total = 0;
+    req.on('data', (c) => {
+      total += c.length;
+      if (total > maxBytes) {
+        req.destroy();
+        reject(new Error('payload_too_large'));
+        return;
+      }
+      chunks.push(c);
+    });
     req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    req.on('error', reject);
   });
 }
+
+function upgradeBearerIfOpaque(authHeader) {
+  if (!authHeader || !authHeader.startsWith('Bearer ')) return undefined;
+  const rawTok = authHeader.slice('Bearer '.length).trim();
+  if (!rawTok) return undefined;
+  if (rawTok.split('.').length === 3) return `Bearer ${rawTok}`;
+  return `Bearer ${signClientBearerToken(S2S_HMAC_SECRET, rawTok)}`;
+}
+
+const MOBILE_SECURITY_HEADERS = {
+  'Cache-Control': 'no-store',
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'SAMEORIGIN',
+  'Referrer-Policy': 'strict-origin-when-cross-origin',
+};
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   const localWallets = new Map();
@@ -243,20 +287,26 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     const url = req.url || '/';
 
     if (url === '/healthz') {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.writeHead(200, { ...MOBILE_SECURITY_HEADERS, 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ status: 'ok', service: 'shortical-mock-mobile-client', port: PORT }));
       return;
     }
 
     if (url.startsWith('/proxy/gateway/')) {
       const targetPath = url.slice('/proxy/gateway'.length);
-      const rawBody = await readReqBody(req);
+      if (!targetPath.startsWith('/api/v1/billing/client/') || targetPath.includes('..')) {
+        res.writeHead(403, { ...MOBILE_SECURITY_HEADERS, 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ error: 'proxy restricted to /api/v1/billing/client/* routes', code: 'forbidden' }));
+        return;
+      }
       try {
+        const rawBody = await readReqBody(req);
+        const signedAuth = upgradeBearerIfOpaque(req.headers.authorization);
         const gwRes = await fetch(`${GATEWAY_URL}${targetPath}`, {
           method: req.method || 'POST',
           headers: {
             'Content-Type': 'application/json',
-            ...(req.headers.authorization ? { Authorization: req.headers.authorization } : {}),
+            ...(signedAuth ? { Authorization: signedAuth } : {}),
             ...(req.headers['x-billing-sdk-version']
               ? { 'X-Billing-SDK-Version': req.headers['x-billing-sdk-version'] }
               : {}),
@@ -264,10 +314,11 @@ if (import.meta.url === `file://${process.argv[1]}`) {
           body: req.method === 'GET' ? undefined : rawBody,
         });
         const text = await gwRes.text();
-        res.writeHead(gwRes.status, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.writeHead(gwRes.status, { ...MOBILE_SECURITY_HEADERS, 'Content-Type': 'application/json; charset=utf-8' });
         res.end(text);
       } catch (err) {
-        res.writeHead(502, { 'Content-Type': 'application/json; charset=utf-8' });
+        const status = err && String(err.message) === 'payload_too_large' ? 413 : 502;
+        res.writeHead(status, { ...MOBILE_SECURITY_HEADERS, 'Content-Type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify({ error: String(err), fallback: 'legacy_rc_offline_fallback' }));
       }
       return;
@@ -332,7 +383,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 
       try {
         const entRes = await fetch(`${GATEWAY_URL}/api/v1/billing/client/entitlements/${encodeURIComponent(subRef)}`, {
-          headers: { Authorization: `Bearer ${subRef}` },
+          headers: { Authorization: `Bearer ${signClientBearerToken(S2S_HMAC_SECRET, subRef)}` },
         });
         if (entRes.ok) {
           const entJson = await entRes.json();
@@ -361,15 +412,18 @@ if (import.meta.url === `file://${process.argv[1]}`) {
         received_rc_events: [],
         updated_at_utc: new Date().toISOString(),
       };
-      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.writeHead(200, { ...MOBILE_SECURITY_HEADERS, 'Content-Type': 'application/json; charset=utf-8' });
       res.end(JSON.stringify(fallbackWallet));
       return;
     }
 
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.writeHead(200, { ...MOBILE_SECURITY_HEADERS, 'Content-Type': 'text/html; charset=utf-8' });
     res.end(renderMobileHarnessPage());
   });
 
+  srv.headersTimeout = 10_000;
+  srv.requestTimeout = 15_000;
+  srv.keepAliveTimeout = 60_000;
   srv.listen(PORT, () => {
     console.log(`==> [shortical-mock-mobile-client] Interactive Mobile UI listening on http://localhost:${PORT}`);
   });

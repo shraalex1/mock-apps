@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"html"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -24,14 +26,17 @@ func (h *HarnessService) NewHarnessRouter() http.Handler {
 		h.mu.RLock()
 		cfg := h.faultConfig
 		h.mu.RUnlock()
-		writeJSON(w, http.StatusOK, map[string]any{
+		resp := map[string]any{
 			"status":               "ok",
 			"service":              "shortical-mock-server",
-			"billing_gateway_url":  h.gatewayURL,
 			"fault_injection_mode": cfg.Mode,
 			"webhooks_received":    cfg.TotalWebhooksReceived,
 			"timestamp_utc":        time.Now().UTC().Format(time.RFC3339),
-		})
+		}
+		if h.appEnv == "" || h.appEnv == "local" {
+			resp["billing_gateway_url"] = h.gatewayURL
+		}
+		writeJSON(w, http.StatusOK, resp)
 	})
 
 	// 1. 1:1 RevenueCat Webhook Receiver (with 5-retry fault injection)
@@ -79,6 +84,38 @@ func (h *HarnessService) NewHarnessRouter() http.Handler {
 			"plan_id":        plan,
 			"mirror":         mirrorOut,
 		})
+	})
+
+	// 1C. S2S-Signed Contained RC Sync Proxy (calls POST /api/v1/billing/sandbox/rc-contained-sync with S2S HMAC)
+	mux.HandleFunc("POST /api/v1/mock/rc/contained-sync", func(w http.ResponseWriter, r *http.Request) {
+		raw, readErr := readBoundedMockBody(w, r, maxMockJSONBodyBytes)
+		if readErr != nil {
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"error": "payload_too_large"})
+			return
+		}
+		path := "/api/v1/billing/sandbox/rc-contained-sync"
+		tsStr := strconv.FormatInt(time.Now().UTC().Unix(), 10)
+		sig := ComputeS2SSignature(h.s2sSecret, tsStr, http.MethodPost, path, raw)
+		httpReq, reqErr := http.NewRequest(http.MethodPost, h.gatewayURL+path, bytes.NewReader(raw))
+		if reqErr != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "gateway_request_failed"})
+			return
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("X-Billing-Timestamp", tsStr)
+		httpReq.Header.Set("X-Billing-Signature", sig)
+		resp, doErr := h.httpClient.Do(httpReq)
+		if doErr != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "gateway_unreachable"})
+			return
+		}
+		defer resp.Body.Close()
+		var out map[string]any
+		_ = json.NewDecoder(resp.Body).Decode(&out)
+		if out == nil {
+			out = map[string]any{}
+		}
+		writeJSON(w, resp.StatusCode, out)
 	})
 
 	// 2. Configure simulated HTTP response mode (always_200_ok | fail_3_times_then_200 | always_500_error)
@@ -217,13 +254,20 @@ func (h *HarnessService) NewHarnessRouter() http.Handler {
 	})
 
 	mux.HandleFunc("GET /storefront", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'unsafe-inline'; object-src 'none'; frame-ancestors 'self'")
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(renderMockStorefrontHTML(h.gatewayURL)))
 	})
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if origin := r.Header.Get("Origin"); origin != "" {
+		applyMockSecurityHeaders(w)
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "an unexpected internal error occurred", "code": "internal_error"})
+			}
+		}()
+		if origin := r.Header.Get("Origin"); origin != "" && h.isAllowedOrigin(origin) {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Vary", "Origin")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
@@ -232,6 +276,17 @@ func (h *HarnessService) NewHarnessRouter() http.Handler {
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
+		}
+		if r.URL.Path != "/healthz" {
+			allowed, remaining := h.limiter.allow(extractMockClientIP(r), time.Now().UTC())
+			w.Header().Set("X-RateLimit-Remaining", strconv.Itoa(remaining))
+			if !allowed {
+				writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "rate limit exceeded", "code": "too_many_requests"})
+				return
+			}
+		}
+		if r.Body != nil && r.URL.Path != "/webhooks/revenuecat" {
+			r.Body = http.MaxBytesReader(w, r.Body, maxMockJSONBodyBytes)
 		}
 		mux.ServeHTTP(w, r)
 		if r.URL.Path != "/healthz" {
@@ -310,9 +365,9 @@ func (h *HarnessService) ExecuteMobileHarnessFlow(req models.MobileHarnessSimula
 		return 0, nil, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+subRef)
+	httpReq.Header.Set("Authorization", "Bearer "+SignClientBearerJWT(h.s2sSecret, subRef, time.Now().UTC()))
 
-	resp, err := http.DefaultClient.Do(httpReq)
+	resp, err := h.httpClient.Do(httpReq)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -356,7 +411,7 @@ func renderMockStorefrontHTML(gatewayURL string) string {
 </head>
 <body style="background:#0d0e26;color:#f8fafc;font-family:system-ui,sans-serif;padding:24px;">
   <h1>Shortical Clean-Room Mock Server (api-service :4470)</h1>
-  <p>Connected Gateway: <code>` + gatewayURL + `</code> (100% Isolated from Production)</p>
+  <p>Connected Gateway: <code>` + html.EscapeString(gatewayURL) + `</code> (100% Isolated from Production)</p>
 </body>
 </html>`
 }

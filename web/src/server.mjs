@@ -3,7 +3,9 @@ import http from 'node:http';
 const PORT = Number(process.env.MOCK_STOREFRONT_PORT || 5390);
 const GATEWAY_URL = process.env.BILLING_GATEWAY_URL || 'http://localhost:4460';
 const MOCK_SERVER_URL = process.env.MOCK_API_SERVICE_URL || 'http://localhost:4470';
-const PADDLE_CLIENT_TOKEN = process.env.PADDLE_CLIENT_TOKEN || 'test_36986053c7726600811db7016ac';
+const PADDLE_CLIENT_TOKEN = process.env.PADDLE_CLIENT_TOKEN || '';
+const RC_WEB_PUBLIC_KEY = process.env.RC_WEB_PUBLIC_KEY || '';
+const RC_TEST_BUYER_EMAIL = process.env.RC_TEST_BUYER_EMAIL || 'buyer+rctest@entlora.com';
 
 const SAMPLE_GOOGLE_RTDN_JSON = JSON.stringify({
   version: '1.0',
@@ -74,9 +76,9 @@ export function renderStorefrontPage(
     </div>
     <div class="card">
       <h3 style="margin-top:0;">3. Contained RevenueCat Sandbox + mirror_to_test &amp; GCP Pub/Sub RTDN</h3>
-      <p style="font-size:12px;color:#cbd5e1;">Note: RevenueCat Web Billing blocks dummy domains like <code>@test.com</code> (<code>code: 7834</code>). Use a valid MX domain email below (pre-filled with <code>shraalex0+rctest@gmail.com</code>).</p>
-      <input id="rc-web-key" value="rcb_sb_awPqPAzCqwOatDODGiNQpEaqC" placeholder="RC Web Key (rcb_sb_...) or Stripe Key (strp_...)" />
-      <input id="rc-web-email" value="shraalex0+rctest@gmail.com" placeholder="Buyer Email with valid MX (e.g. shraalex0+rctest@gmail.com)" />
+      <p style="font-size:12px;color:#cbd5e1;">Note: RevenueCat Web Billing blocks dummy domains like <code>@test.com</code> (<code>code: 7834</code>). Use a valid MX domain email below.</p>
+      <input id="rc-web-key" value="${RC_WEB_PUBLIC_KEY.replace(/"/g, '&quot;')}" placeholder="RC Web Key (rcb_sb_...) or Stripe Key (strp_...)" />
+      <input id="rc-web-email" value="${RC_TEST_BUYER_EMAIL.replace(/"/g, '&quot;')}" placeholder="Buyer Email with valid MX (e.g. buyer+rctest@entlora.com)" />
       <button id="btn-rc-contained" class="green">Run Contained RC Checkout + mirror_to_test</button>
       <button id="btn-copy-pubsub" class="secondary">Copy Google Pub/Sub RTDN JSON</button>
     </div>
@@ -268,7 +270,7 @@ export function renderStorefrontPage(
 
     document.getElementById('btn-rc-contained').onclick = async () => {
       const apiKey = document.getElementById('rc-web-key').value.trim();
-      const customerEmail = (document.getElementById('rc-web-email')?.value || 'shraalex0+rctest@gmail.com').trim();
+      const customerEmail = (document.getElementById('rc-web-email')?.value || 'buyer+rctest@entlora.com').trim();
       const subRef = 'uid_rc_cleanroom_' + Math.floor(Date.now() / 1000);
       try {
         if (apiKey.startsWith('rcb_')) {
@@ -301,7 +303,7 @@ export function renderStorefrontPage(
           show('Contained RC Checkout + mirror_to_test Completed', 200, { rc_customer_info: purchaseRes.customerInfo, mirror_to_test: await mirrorRes.json() });
           return;
         }
-        const syncRes = await fetch(GW_SRV + '/api/v1/billing/sandbox/rc-contained-sync', {
+        const syncRes = await fetch(MOCK_SRV + '/api/v1/mock/rc/contained-sync', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ subscriber_ref: subRef, brand: 'Shortical', rc_api_key: apiKey })
@@ -329,16 +331,33 @@ export function renderStorefrontPage(
 </html>`;
 }
 
+const SECURITY_HEADERS = {
+  'Cache-Control': 'no-store',
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'SAMEORIGIN',
+  'Referrer-Policy': 'strict-origin-when-cross-origin',
+  'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+  'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
+};
+
 if (import.meta.url === `file://${process.argv[1]}`) {
   const srv = http.createServer((req, res) => {
     if (req.url === '/healthz') {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.writeHead(200, { ...SECURITY_HEADERS, 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ status: 'ok', service: 'shortical-mock-web-client', port: PORT }));
       return;
     }
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.writeHead(200, {
+      ...SECURITY_HEADERS,
+      'Content-Security-Policy':
+        "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.paddle.com https://esm.sh; style-src 'self' 'unsafe-inline' https://cdn.paddle.com; connect-src 'self' https: http:; frame-src 'self' https://*.paddle.com; object-src 'none'; base-uri 'self'; frame-ancestors 'self'",
+      'Content-Type': 'text/html; charset=utf-8',
+    });
     res.end(renderStorefrontPage());
   });
+  srv.headersTimeout = 10_000;
+  srv.requestTimeout = 15_000;
+  srv.keepAliveTimeout = 60_000;
   srv.listen(PORT, () => {
     console.log(`==> [shortical-mock-web-client] Listening on http://localhost:${PORT}`);
   });

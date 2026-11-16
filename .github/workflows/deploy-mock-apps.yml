@@ -14,7 +14,15 @@ on:
       - dev-ex
       - dev
       - main
+  pull_request:
+    branches:
+      - dev-ex
+      - dev
+      - main
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   verify:
@@ -34,9 +42,9 @@ jobs:
         with:
           node-version: "24"
 
-      - name: Run Server, Web & Mobile Mock Test Suites
+      - name: Run Server, Web & Mobile Mock Test Suites + Security Audits (OWASP A03:2025)
         run: |
-          cd server && go test -v ./tests/...
+          cd server && go vet ./... && go test -race -v ./tests/... && go run golang.org/x/vuln/cmd/govulncheck@latest ./...
           cd ../web && npm test
           cd ../mobile && npm test
 
@@ -81,13 +89,9 @@ jobs:
         run: |
           docker build --platform linux/amd64 \
             -t "$ECR_REGISTRY/shortical-mock-server:$IMAGE_TAG" \
-            -t "$ECR_REGISTRY/shortical-mock-server:dev" \
             -f server/Dockerfile server
           docker build --platform linux/amd64 \
             -t "$ECR_REGISTRY/shortical-mock-web:$IMAGE_TAG" \
-            -t "$ECR_REGISTRY/shortical-mock-web:dev" \
             -f web/Dockerfile web
           docker push "$ECR_REGISTRY/shortical-mock-server:$IMAGE_TAG"
-          docker push "$ECR_REGISTRY/shortical-mock-server:dev"
           docker push "$ECR_REGISTRY/shortical-mock-web:$IMAGE_TAG"
-          docker push "$ECR_REGISTRY/shortical-mock-web:dev"
