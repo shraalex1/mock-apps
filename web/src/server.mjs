@@ -151,6 +151,10 @@ export function renderStorefrontPage(
           const urlMatch = String(st).match(/checkout_url=(\S+)/);
           if (urlMatch) latestPaddleCheckoutUrl = urlMatch[1];
         }
+        if (latestPaddleTxnId && (!latestPaddleCheckoutUrl || latestPaddleCheckoutUrl.includes('trycloudflare.com') || (latestPaddleCheckoutUrl.includes('localhost:4460') && window.location.hostname !== 'localhost'))) {
+          const qParam = latestPaddleTxnId.startsWith('pi_') ? '_stripe_pi=' : '_ptxn=';
+          latestPaddleCheckoutUrl = GW_SRV + '/api/v1/billing/sandbox/checkout-relay?' + qParam + encodeURIComponent(latestPaddleTxnId);
+        }
         show(label, res.status, data);
       } catch (e) {
         show(label + ' Error', 0, { error: String(e) });
@@ -360,7 +364,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     res.writeHead(200, {
       ...SECURITY_HEADERS,
       'Content-Security-Policy':
-        "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.paddle.com https://esm.sh; style-src 'self' 'unsafe-inline' https://cdn.paddle.com; connect-src 'self' https: http:; frame-src 'self' https://*.paddle.com; object-src 'none'; base-uri 'self'; frame-ancestors 'self'",
+        "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.paddle.com https://*.paddle.com https://esm.sh https://js.stripe.com https://*.stripe.com https://*.revenuecat.com; style-src 'self' 'unsafe-inline' https://cdn.paddle.com https://*.paddle.com https://*.stripe.com https://*.revenuecat.com https://fonts.googleapis.com; img-src 'self' data: blob: https: http:; font-src 'self' data: https:; connect-src 'self' https: http:; frame-src 'self' https://*.paddle.com https://js.stripe.com https://*.stripe.com https://hooks.stripe.com https://*.revenuecat.com; object-src 'none'; base-uri 'self'; frame-ancestors 'self'",
       'Content-Type': 'text/html; charset=utf-8',
     });
     res.end(renderStorefrontPage());
