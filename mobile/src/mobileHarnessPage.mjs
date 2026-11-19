@@ -115,12 +115,13 @@ export function renderMobileHarnessPage(gatewayUrl = GATEWAY_URL, mockServerUrl 
     </div>
 
     <div class="section">
-      <h2>0. Target Environment Switch (Local vs AWS Dev)</h2>
+      <h2>0. Target Environment Switch (Local vs AWS Dev / Dev-Ex)</h2>
       <div class="row">
         <select id="target-env-select">
           <option value="http://localhost:4460">🏠 Local Gateway (http://localhost:4460)</option>
-          <option value="https://d1or4hheo2gkkq.cloudfront.net">☁️ AWS Dev — CloudFront HTTPS (d1or4hheo2gkkq.cloudfront.net)</option>
-          <option value="http://rev-tiger-dev-alb-363906758.us-east-1.elb.amazonaws.com">☁️ AWS Dev — Direct ALB HTTP (rev-tiger-dev-alb-...)</option>
+          <option value="https://d1or4hheo2gkkq.cloudfront.net">☁️ Shortical AWS Dev — CloudFront HTTPS (d1or4hheo2gkkq.cloudfront.net)</option>
+          <option value="http://rev-tiger-dev-alb-363906758.us-east-1.elb.amazonaws.com">☁️ Shortical AWS Dev — Direct ALB HTTP (rev-tiger-dev-alb-...)</option>
+          <option value="https://dev-api.entlora.com">☁️ Entlora AWS Dev-Ex — HTTPS (dev-api.entlora.com)</option>
         </select>
       </div>
     </div>
