@@ -5,7 +5,7 @@ const GATEWAY_URL = process.env.BILLING_GATEWAY_URL || 'http://localhost:4460';
 const MOCK_SERVER_URL = process.env.MOCK_API_SERVICE_URL || 'http://localhost:4470';
 const PADDLE_CLIENT_TOKEN = process.env.PADDLE_CLIENT_TOKEN || '';
 const RC_WEB_PUBLIC_KEY = process.env.RC_WEB_PUBLIC_KEY || '';
-const RC_TEST_BUYER_EMAIL = process.env.RC_TEST_BUYER_EMAIL || 'buyer+rctest@entlora.com';
+const RC_TEST_BUYER_EMAIL = process.env.RC_TEST_BUYER_EMAIL || '';
 
 const SAMPLE_GOOGLE_RTDN_JSON = JSON.stringify({
   version: '1.0',
@@ -69,17 +69,19 @@ export function renderStorefrontPage(
     </div>
     <div class="card">
       <h3 style="margin-top:0;">2. Cohort Rollout Simulator, 409 Quarantine &amp; Email Link</h3>
-      <p style="font-size:12px;color:#cbd5e1;">Test all 3 operational modes (<code>test 0%</code> Contained RC + <code>mirror_to_test</code>, <code>transition X%</code> Cohort Split, <code>transition 100%</code> In-House), 409 Quarantine, or Web-to-App email link.</p>
+      <p style="font-size:12px;color:#cbd5e1;">Test all 3 operational modes (<code>test 0%</code> Contained RC + <code>mirror_to_test</code>, <code>transition X%</code> Cohort Split, <code>transition 100%</code> In-House), 409 Quarantine, or Web2App email-to-account binding.</p>
       <button id="btn-cohort-batch" class="green">Run 4-Subscriber Cohort Rollout Batch</button>
       <button id="btn-quarantine">Trigger Broken Deploy (409 Quarantine)</button>
+      <input id="web-link-email" value="" placeholder="Buyer email to link web purchase to app account (e.g. you@domain.com)" />
       <button id="btn-attach-web" class="secondary">Link Web Purchase via Email</button>
     </div>
     <div class="card">
       <h3 style="margin-top:0;">3. Contained RevenueCat Sandbox + mirror_to_test &amp; GCP Pub/Sub RTDN</h3>
-      <p style="font-size:12px;color:#cbd5e1;">Note: RevenueCat Web Billing blocks dummy domains like <code>@test.com</code> (<code>code: 7834</code>). Use a valid MX domain email below.</p>
+      <p style="font-size:12px;color:#cbd5e1;">Note: RevenueCat Web Billing blocks dummy domains like <code>@test.com</code> (<code>code: 7834</code>). Enter any valid MX domain email below.</p>
       <input id="rc-web-key" value="${RC_WEB_PUBLIC_KEY.replace(/"/g, '&quot;')}" placeholder="RC Web Key (rcb_sb_...) or Stripe Key (strp_...)" />
-      <input id="rc-web-email" value="${RC_TEST_BUYER_EMAIL.replace(/"/g, '&quot;')}" placeholder="Buyer Email with valid MX (e.g. buyer+rctest@entlora.com)" />
+      <input id="rc-web-email" value="${RC_TEST_BUYER_EMAIL.replace(/"/g, '&quot;')}" placeholder="Buyer Email with valid MX domain (e.g. you@gmail.com)" />
       <button id="btn-rc-contained" class="green">Run Contained RC Checkout + mirror_to_test</button>
+      <button id="btn-send-pubsub" class="secondary">Send Google RTDN Push to Gateway</button>
       <button id="btn-copy-pubsub" class="secondary">Copy Google Pub/Sub RTDN JSON</button>
     </div>
   </div>
@@ -270,13 +272,20 @@ export function renderStorefrontPage(
       });
 
     document.getElementById('btn-attach-web').onclick = async () => {
+      const linkEmail = (document.getElementById('web-link-email')?.value || '').trim();
+      if (!linkEmail || !linkEmail.includes('@')) {
+        show('Web-to-App Email Link — Email Required', 400, {
+          hint: 'Enter an email address in the input field above "Link Web Purchase via Email" to bind a web checkout purchase to the in-app subscriber_ref (uid_web_shortical_01).'
+        });
+        return;
+      }
       try {
         const res = await fetch(MOCK_SRV + '/api/v1/monetization/subscription/web/link', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ subscriber_ref: 'uid_web_shortical_01', email: 'viewer@shortical.com' })
+          body: JSON.stringify({ subscriber_ref: 'uid_web_shortical_01', email: linkEmail })
         });
-        show('Web-to-App Email Link', res.status, await res.json());
+        show('Web-to-App Email Link (Bound Web Checkout Email -> Mobile subscriber_ref)', res.status, await res.json());
       } catch (e) {
         show('Email Link Error', 0, { error: String(e) });
       }
@@ -284,7 +293,13 @@ export function renderStorefrontPage(
 
     document.getElementById('btn-rc-contained').onclick = async () => {
       const apiKey = document.getElementById('rc-web-key').value.trim();
-      const customerEmail = (document.getElementById('rc-web-email')?.value || 'buyer+rctest@entlora.com').trim();
+      const customerEmail = (document.getElementById('rc-web-email')?.value || '').trim();
+      if (apiKey.startsWith('rcb_') && (!customerEmail || !customerEmail.includes('@'))) {
+        show('Contained RC Checkout — Buyer Email Required', 400, {
+          hint: 'Enter a buyer email with a valid MX domain (e.g. your email or any @gmail.com/@outlook.com address) in the field above before starting RevenueCat Web Billing checkout.'
+        });
+        return;
+      }
       const subRef = 'uid_rc_cleanroom_' + Math.floor(Date.now() / 1000);
       try {
         if (apiKey.startsWith('rcb_')) {
@@ -331,6 +346,26 @@ export function renderStorefrontPage(
         show('Contained RC Stripe Receipt Sync + mirror_to_test', syncRes.status, { rc_sync: syncData, mirror_to_test: await mirrorRes.json() });
       } catch (e) {
         show('Contained RC Checkout Error', 500, { error: String(e) });
+      }
+    };
+
+    document.getElementById('btn-send-pubsub').onclick = async () => {
+      try {
+        const rtdnObj = JSON.parse(PUBSUB_RTDN_JSON);
+        const res = await fetch(MOCK_SRV + '/api/v1/mock/mobile/simulate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            subscriber_ref: rtdnObj.subscriber_ref || 'uid_android_pubsub_01',
+            brand: rtdnObj.brand || 'Shortical',
+            provider: 'google',
+            product_id: 'coins_sub:weekly-base',
+            amount_cents: rtdnObj.amount_cents || 999
+          })
+        });
+        show('Simulated Google Play v8 / RTDN Subscription Settlement via Mock Server (:4470)', res.status, await res.json());
+      } catch (e) {
+        show('Google Pub/Sub RTDN Simulation Error', 500, { error: String(e) });
       }
     };
 
