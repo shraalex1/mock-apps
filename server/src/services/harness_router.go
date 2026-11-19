@@ -129,6 +129,20 @@ func (h *HarnessService) NewHarnessRouter() http.Handler {
 	})
 
 	// 3. Polled by shortical-mock-web-client (20s poll) & shortical-mock-mobile-client (10s poll)
+	mux.HandleFunc("GET /api/v1/mock/state", func(w http.ResponseWriter, _ *http.Request) {
+		h.mu.RLock()
+		cfg := h.faultConfig
+		subCount := len(h.walletsBySubscriber)
+		h.mu.RUnlock()
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":               "ok",
+			"service":              "shortical-mock-server",
+			"fault_injection_mode": cfg.Mode,
+			"webhooks_received":    cfg.TotalWebhooksReceived,
+			"tracked_subscribers":  subCount,
+			"timestamp_utc":        time.Now().UTC().Format(time.RFC3339),
+		})
+	})
 	mux.HandleFunc("GET /api/v1/mock/subscribers/{subscriber_ref}", func(w http.ResponseWriter, r *http.Request) {
 		subRef := r.PathValue("subscriber_ref")
 		writeJSON(w, http.StatusOK, h.GetSubscriberState(subRef))
