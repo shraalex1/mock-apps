@@ -30,17 +30,27 @@ if [[ -z "${BILLING_GATEWAY_URL:-}" ]]; then
   case "${TARGET_ENV}" in
     dev|aws-dev|shortical-dev)
       BILLING_GATEWAY_URL="https://d1or4hheo2gkkq.cloudfront.net"
-      MOCK_API_SERVICE_URL="${MOCK_API_SERVICE_URL:-http://rev-tiger-dev-alb-363906758.us-east-1.elb.amazonaws.com}"
+      MOCK_API_SERVICE_URL="${MOCK_API_SERVICE_URL:-http://rev-tiger-dev-alb-363906758.us-east-1.elb.amazonaws.com:4470}"
+      ENV_FILE_CANDIDATE="${MOBILE_DIR}/../../apps/server/.env.dev"
       ;;
     dev-ex|entlora-dev)
       BILLING_GATEWAY_URL="https://dev-api.entlora.com"
       MOCK_API_SERVICE_URL="${MOCK_API_SERVICE_URL:-https://dev-mockserver.entlora.com}"
+      ENV_FILE_CANDIDATE="${MOBILE_DIR}/../../apps/server/.env.dev-ex"
       ;;
     *)
       BILLING_GATEWAY_URL="http://localhost:4460"
       MOCK_API_SERVICE_URL="${MOCK_API_SERVICE_URL:-http://localhost:4470}"
+      ENV_FILE_CANDIDATE="${MOBILE_DIR}/../../apps/server/.env.local"
       ;;
   esac
+fi
+
+if [[ -n "${ENV_FILE_CANDIDATE:-}" && -f "${ENV_FILE_CANDIDATE}" ]]; then
+  FILE_S2S="$(grep -E '^S2S_HMAC_SECRET_CURRENT=' "${ENV_FILE_CANDIDATE}" | head -n 1 | cut -d= -f2- | tr -d '\r' || true)"
+  if [[ -n "${FILE_S2S}" && "${FILE_S2S}" != REPLACE_* ]]; then
+    export S2S_HMAC_SECRET_CURRENT="${S2S_HMAC_SECRET_CURRENT:-${FILE_S2S}}"
+  fi
 fi
 
 export BILLING_GATEWAY_URL
@@ -51,7 +61,7 @@ ensure_mobile_ui_server() {
   pkill -f "mobileHarness.mjs" 2>/dev/null || true
   sleep 0.3
   echo "==> [Mobile App Server :${MOBILE_PORT}] Target Env: ${TARGET_ENV} -> Gateway: ${BILLING_GATEWAY_URL}"
-  nohup env BILLING_GATEWAY_URL="${BILLING_GATEWAY_URL}" MOCK_API_SERVICE_URL="${MOCK_API_SERVICE_URL}" node "${MOBILE_DIR}/src/mobileHarness.mjs" >/tmp/shortical-mock-mobile.log 2>&1 &
+  nohup env BILLING_GATEWAY_URL="${BILLING_GATEWAY_URL}" MOCK_API_SERVICE_URL="${MOCK_API_SERVICE_URL}" S2S_HMAC_SECRET_CURRENT="${S2S_HMAC_SECRET_CURRENT:-}" node "${MOBILE_DIR}/src/mobileHarness.mjs" >/tmp/shortical-mock-mobile.log 2>&1 &
   sleep 1
   echo "==> [Mobile App Server :${MOBILE_PORT}] Live at ${MOBILE_UI_URL}"
 }

@@ -85,8 +85,18 @@ export function renderStorefrontPage(
   </div>
   <pre id="web-out">Ready. Click any button above to run a live E2E request against Mock Server (${mockServerUrl}) &amp; Gateway (${gatewayUrl}).</pre>
   <script>
-    const MOCK_SRV = ${JSON.stringify(mockServerUrl)};
-    const GW_SRV = ${JSON.stringify(gatewayUrl)};
+    const RAW_MOCK_SRV = ${JSON.stringify(mockServerUrl)};
+    const RAW_GW_SRV = ${JSON.stringify(gatewayUrl)};
+    const MOCK_SRV = (window.location.hostname.includes('elb.amazonaws.com') && RAW_MOCK_SRV.includes('shortical.com'))
+      ? (window.location.protocol + '//' + window.location.hostname + ':4470')
+      : (window.location.hostname.includes('cloudfront.net') && RAW_MOCK_SRV.includes('shortical.com'))
+        ? window.location.origin
+        : RAW_MOCK_SRV;
+    const GW_SRV = (window.location.hostname.includes('elb.amazonaws.com') && RAW_GW_SRV.includes('shortical.com'))
+      ? (window.location.protocol + '//' + window.location.hostname)
+      : (window.location.hostname.includes('cloudfront.net') && RAW_GW_SRV.includes('shortical.com'))
+        ? window.location.origin
+        : RAW_GW_SRV;
     const DEFAULT_PADDLE_TOK = ${JSON.stringify(paddleClientToken)};
     const PUBSUB_RTDN_JSON = ${JSON.stringify(SAMPLE_GOOGLE_RTDN_JSON)};
     const out = document.getElementById('web-out');

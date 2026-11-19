@@ -276,8 +276,9 @@ export function renderMobileHarnessPage(gatewayUrl = GATEWAY_URL, mockServerUrl 
             rc_expires_at_utc: '2026-11-17T00:00:00Z'
           })
         });
-        lastFp = fp;
-        logResult('mirror_to_test Dispatched to Gateway', res.status, await res.json());
+        const data = await res.json();
+        if (res.ok) lastFp = fp;
+        logResult('mirror_to_test Dispatched to Gateway', res.status, data);
       } catch (e) {
         logResult('mirror_to_test Error', 0, { error: String(e) });
       }

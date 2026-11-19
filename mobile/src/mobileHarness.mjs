@@ -190,11 +190,12 @@ export class KmpBillingClientSimulator {
     productId,
     offeringTag = 'vip',
     platform,
+    forceInhouseVerify = false,
   }) {
     const session = await this.initialize(subscriberRef, {
       platform: platform || (provider === 'google' ? 'android' : 'ios'),
     });
-    if (!this.canRouteChargeToInhouse()) {
+    if (!forceInhouseVerify && !this.canRouteChargeToInhouse()) {
       const mirror = await this.mirrorToTestIfNeeded({
         subscriberRef,
         provider,
@@ -360,6 +361,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
           provider,
           productId: prodId,
           offeringTag: prodId.includes('coin') ? 'coins' : 'vip',
+          forceInhouseVerify: true,
         });
         if (outcome.charge_committed || outcome.mirror?.status === 'recorded_match' || outcome.mirror?.status === 'deduplicated_locally_24h' || outcome.wrapper_route) {
           localWallets.set(subRef, {
