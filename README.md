@@ -15,12 +15,15 @@ repos/mock-apps/
 ## 1. Quick Commands (Local Laptop & Cloud CI)
 
 ```bash
-cd repos/mock-apps
-make test          # Runs Go + Web + Mobile automated E2E suites
-make ios-sim       # Verifies on local Xcode iOS Simulator (xcrun simctl + ShorticalProducts.storekit)
-make android-emu   # Verifies on local Android Studio Emulator (adb)
-make usb-device    # Verifies on USB-connected iPhone (devicectl) or Android phone (adb -d)
-make ota-manifest  # Generates private Over-The-Air (itms-services://) manifest.plist & APK link for closed testers
+cd mock-apps
+make test             # Runs Go + Web + Mobile automated E2E suites
+make ios-sim          # Verifies on local Xcode iOS Simulator against local Gateway (:4460)
+make ios-sim-dev      # Verifies on local Xcode iOS Simulator pointed directly at AWS Dev (https://d1or4hheo2gkkq.cloudfront.net)
+make android-emu      # Verifies on local Android Studio Emulator (adb) against local Gateway (:4460)
+make android-emu-dev  # Verifies on local Android Studio Emulator pointed directly at AWS Dev
+make usb-device       # Verifies on USB-connected iPhone (devicectl) or Android phone (adb -d) against local Gateway
+make usb-device-dev   # Verifies on USB-connected phone pointed directly at AWS Dev
+make ota-manifest     # Generates private Over-The-Air (itms-services://) manifest.plist & APK link for closed testers
 ```
 
 ## 2. Security & OWASP Top 10 Hardening

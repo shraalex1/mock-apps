@@ -280,11 +280,28 @@ const MOBILE_SECURITY_HEADERS = {
   'Referrer-Policy': 'strict-origin-when-cross-origin',
 };
 
+const ALLOWED_TARGET_GATEWAYS = new Set([
+  GATEWAY_URL,
+  'http://localhost:4460',
+  'https://d1or4hheo2gkkq.cloudfront.net',
+  'http://rev-tiger-dev-alb-363906758.us-east-1.elb.amazonaws.com',
+  'https://dev-api.entlora.com',
+]);
+
+function resolveAllowedGatewayUrl(reqHeaderOrField) {
+  const candidate = String(reqHeaderOrField || '').trim().replace(/\/+$/, '');
+  if (candidate && ALLOWED_TARGET_GATEWAYS.has(candidate)) {
+    return candidate;
+  }
+  return GATEWAY_URL;
+}
+
 if (import.meta.url === `file://${process.argv[1]}`) {
   const localWallets = new Map();
 
   const srv = http.createServer(async (req, res) => {
     const url = req.url || '/';
+    const activeGatewayUrl = resolveAllowedGatewayUrl(req.headers['x-target-gateway-url']);
 
     if (url === '/healthz') {
       res.writeHead(200, { ...MOBILE_SECURITY_HEADERS, 'Content-Type': 'application/json' });
@@ -302,7 +319,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       try {
         const rawBody = await readReqBody(req);
         const signedAuth = upgradeBearerIfOpaque(req.headers.authorization);
-        const gwRes = await fetch(`${GATEWAY_URL}${targetPath}`, {
+        const gwRes = await fetch(`${activeGatewayUrl}${targetPath}`, {
           method: req.method || 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -334,7 +351,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 
       try {
         const client = new KmpBillingClientSimulator({
-          gatewayBaseUrl: GATEWAY_URL,
+          gatewayBaseUrl: resolveAllowedGatewayUrl(parsed.target_gateway_url || req.headers['x-target-gateway-url']),
           mockServerUrl: MOCK_SERVER_URL,
           brand,
         });
@@ -382,7 +399,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       }
 
       try {
-        const entRes = await fetch(`${GATEWAY_URL}/api/v1/billing/client/entitlements/${encodeURIComponent(subRef)}`, {
+        const entRes = await fetch(`${activeGatewayUrl}/api/v1/billing/client/entitlements/${encodeURIComponent(subRef)}`, {
           headers: { Authorization: `Bearer ${signClientBearerToken(S2S_HMAC_SECRET, subRef)}` },
         });
         if (entRes.ok) {

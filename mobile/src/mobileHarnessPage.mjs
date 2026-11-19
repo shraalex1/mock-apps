@@ -115,6 +115,17 @@ export function renderMobileHarnessPage(gatewayUrl = GATEWAY_URL, mockServerUrl 
     </div>
 
     <div class="section">
+      <h2>0. Target Environment Switch (Local vs AWS Dev)</h2>
+      <div class="row">
+        <select id="target-env-select">
+          <option value="http://localhost:4460">🏠 Local Gateway (http://localhost:4460)</option>
+          <option value="https://d1or4hheo2gkkq.cloudfront.net">☁️ AWS Dev — CloudFront HTTPS (d1or4hheo2gkkq.cloudfront.net)</option>
+          <option value="http://rev-tiger-dev-alb-363906758.us-east-1.elb.amazonaws.com">☁️ AWS Dev — Direct ALB HTTP (rev-tiger-dev-alb-...)</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="section">
       <h2>Subscriber &amp; Platform Identity</h2>
       <div class="row">
         <input id="sub-ref" value="uid_mobile_emu_01" placeholder="subscriber_ref" />
@@ -161,8 +172,15 @@ export function renderMobileHarnessPage(gatewayUrl = GATEWAY_URL, mockServerUrl 
     const subInput = document.getElementById('sub-ref');
     const platSelect = document.getElementById('platform-select');
     const platBadge = document.getElementById('platform-badge');
+    const envSelect = document.getElementById('target-env-select');
+    const defaultGw = ${JSON.stringify(gatewayUrl)};
 
     const params = new URLSearchParams(window.location.search);
+    if (params.get('env') === 'dev' || defaultGw.includes('cloudfront.net') || defaultGw.includes('elb.amazonaws.com')) {
+      envSelect.value = 'https://d1or4hheo2gkkq.cloudfront.net';
+    } else {
+      envSelect.value = 'http://localhost:4460';
+    }
     if (params.get('platform') === 'ios' || /iPhone|iPad/i.test(navigator.userAgent)) {
       platSelect.value = 'ios';
       platBadge.textContent = 'Xcode iOS Sim';
@@ -173,8 +191,12 @@ export function renderMobileHarnessPage(gatewayUrl = GATEWAY_URL, mockServerUrl 
 
     let lastFp = null;
 
+    function activeGwHeader() {
+      return { 'X-Target-Gateway-Url': envSelect.value };
+    }
+
     function logResult(title, status, data) {
-      out.textContent = '[' + new Date().toISOString().slice(11, 19) + '] ' + title + ' (HTTP ' + status + ')\\n' + JSON.stringify(data, null, 2);
+      out.textContent = '[' + new Date().toISOString().slice(11, 19) + ' | ' + envSelect.value + '] ' + title + ' (HTTP ' + status + ')\\n' + JSON.stringify(data, null, 2);
     }
 
     document.getElementById('btn-init').onclick = async () => {
@@ -182,7 +204,7 @@ export function renderMobileHarnessPage(gatewayUrl = GATEWAY_URL, mockServerUrl 
       try {
         const res = await fetch('/proxy/gateway/api/v1/billing/client/initialize', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sub, 'X-Billing-SDK-Version': '1.4.0' },
+          headers: { ...activeGwHeader(), 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sub, 'X-Billing-SDK-Version': '1.4.0' },
           body: JSON.stringify({ subscriber_ref: sub, brand: 'Shortical', contract_version: '1.4.0', client_platform: platSelect.value })
         });
         logResult('Initialize KMP SDK', res.status, await res.json());
@@ -194,7 +216,7 @@ export function renderMobileHarnessPage(gatewayUrl = GATEWAY_URL, mockServerUrl 
     document.getElementById('btn-wallet').onclick = async () => {
       const sub = subInput.value.trim() || 'uid_mobile_emu_01';
       try {
-        const res = await fetch('/api/mobile/wallet/' + encodeURIComponent(sub));
+        const res = await fetch('/api/mobile/wallet/' + encodeURIComponent(sub), { headers: activeGwHeader() });
         logResult('Subscriber Wallet & VIP State', res.status, await res.json());
       } catch (e) {
         logResult('Wallet Check Error', 0, { error: String(e) });
@@ -206,8 +228,8 @@ export function renderMobileHarnessPage(gatewayUrl = GATEWAY_URL, mockServerUrl 
       try {
         const res = await fetch('/api/mobile/simulate', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ subscriber_ref: sub, brand: 'Shortical', provider: 'apple', product_id: 'com.shortical.coins.gold' })
+          headers: { ...activeGwHeader(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ subscriber_ref: sub, brand: 'Shortical', provider: 'apple', product_id: 'com.shortical.coins.gold', target_gateway_url: envSelect.value })
         });
         logResult('iOS StoreKit 2 JWS Purchase Verified', res.status, await res.json());
       } catch (e) {
@@ -220,8 +242,8 @@ export function renderMobileHarnessPage(gatewayUrl = GATEWAY_URL, mockServerUrl 
       try {
         const res = await fetch('/api/mobile/simulate', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ subscriber_ref: sub, brand: 'Shortical', provider: 'google', product_id: 'vip_sub:weekly-base' })
+          headers: { ...activeGwHeader(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ subscriber_ref: sub, brand: 'Shortical', provider: 'google', product_id: 'vip_sub:weekly-base', target_gateway_url: envSelect.value })
         });
         logResult('Android Play Billing v8 Verified', res.status, await res.json());
       } catch (e) {
@@ -240,7 +262,7 @@ export function renderMobileHarnessPage(gatewayUrl = GATEWAY_URL, mockServerUrl 
       try {
         const res = await fetch('/proxy/gateway/api/v1/billing/client/mirror-to-test', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sub },
+          headers: { ...activeGwHeader(), 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sub },
           body: JSON.stringify({
             subscriber_ref: sub,
             brand: 'Shortical',
@@ -265,7 +287,7 @@ export function renderMobileHarnessPage(gatewayUrl = GATEWAY_URL, mockServerUrl 
       try {
         const res = await fetch('/proxy/gateway/api/v1/billing/client/restore', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sub },
+          headers: { ...activeGwHeader(), 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sub },
           body: JSON.stringify({ subscriber_ref: sub, brand: 'Shortical', provider: 'apple', offering_tag: 'vip', product_id: 'com.shortical.vip.weekly', store_token_ref: 'orig_tx_shared_991' })
         });
         logResult('Restore Purchases (Owner)', res.status, await res.json());
@@ -278,7 +300,7 @@ export function renderMobileHarnessPage(gatewayUrl = GATEWAY_URL, mockServerUrl 
       try {
         const res = await fetch('/proxy/gateway/api/v1/billing/client/restore', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer uid_other_attacker_99' },
+          headers: { ...activeGwHeader(), 'Content-Type': 'application/json', 'Authorization': 'Bearer uid_other_attacker_99' },
           body: JSON.stringify({ subscriber_ref: 'uid_other_attacker_99', brand: 'Shortical', provider: 'apple', offering_tag: 'vip', product_id: 'com.shortical.vip.weekly', store_token_ref: 'orig_tx_shared_991' })
         });
         logResult('Restore Purchases (Cross-Account 409 Test)', res.status, await res.json());
