@@ -65,6 +65,7 @@ export function renderStorefrontPage(
       <button id="btn-stripe-3ds" class="secondary">Stripe 3D-Secure 2 Challenge ($9.99)</button>
       <button id="btn-amex-paddle">Amex -&gt; Paddle Fallback</button>
       <button id="btn-open-paddle-overlay" class="green">🔐 Open Pending Card / 3DS Verification Link ↗</button>
+      <button id="btn-open-manual-3ds-page" class="secondary">💳 Open Manual Card &amp; 3DS2 Approval Page ↗</button>
       <button id="btn-onemore-vip">Checkout OneMore VIP ($19.99)</button>
     </div>
     <div class="card">
@@ -227,6 +228,16 @@ export function renderStorefrontPage(
       }
       const opened = initPaddleAndMaybeOpen(latestPaddleTxnId, latestPaddleToken);
       show('Opened Paddle.js Checkout Overlay', opened ? 200 : 500, { transaction_id: latestPaddleTxnId });
+    };
+
+    document.getElementById('btn-open-manual-3ds-page').onclick = () => {
+      const targetPi = (latestPaddleTxnId && latestPaddleTxnId.startsWith('pi_')) ? latestPaddleTxnId : 'pi_manual_3ds_demo_01';
+      const manualUrl = GW_SRV + '/api/v1/billing/sandbox/checkout-relay?_stripe_pi=' + encodeURIComponent(targetPi) + '&mode=manual';
+      window.open(manualUrl, '_blank', 'noopener');
+      show('Opened Interactive Manual Card Entry & 3DS2 Bank Approval Page', 200, {
+        provider_transaction_id: targetPi,
+        manual_checkout_url: manualUrl
+      });
     };
 
     document.getElementById('btn-onemore-vip').onclick = () =>
