@@ -215,38 +215,34 @@ func (h *HarnessService) HandleRevenueCatWebhook(w http.ResponseWriter, r *http.
 
 // wrapperDecision is the same gate as GatewaySessionConfig.canRouteChargeToInhouse.
 type wrapperDecision struct {
-	Answered bool
-	Inhouse  bool
-	Session  map[string]any
+	Answered        bool
+	Inhouse         bool
+	SDKMode         string
+	ContractVersion string
+	Session         map[string]any
 }
 
 func (h *HarnessService) lookupWrapperRoute(subRef, brand, platform string) wrapperDecision {
-	body, _ := json.Marshal(map[string]any{
-		"subscriber_ref":   subRef,
-		"brand":            brand,
-		"contract_version": "1.4.0",
-		"client_platform":  platform,
-	})
-	req, err := http.NewRequest(http.MethodPost, h.gatewayURL+"/api/v1/billing/client/initialize", bytes.NewReader(body))
-	if err != nil {
-		return wrapperDecision{}
+	candidates := []struct {
+		sdkMode         string
+		contractVersion string
+	}{
+		{"standalone_pure_pipe", "1.4.0-pure-pipe"},
+		{"wrapper_mirror", "1.4.0"},
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+SignClientBearerJWT(h.s2sSecret, subRef, time.Now().UTC()))
-	req.Header.Set("X-Billing-SDK-Version", "1.4.0")
-	resp, err := h.httpClient.Do(req)
-	if err != nil {
-		return wrapperDecision{}
+	for _, cand := range candidates {
+		status, session, err := h.ExecuteSDKModeHandshake(subRef, brand, cand.sdkMode, cand.contractVersion, platform)
+		if err == nil && status >= 200 && status < 300 {
+			return wrapperDecision{
+				Answered:        true,
+				Inhouse:         routeChargesInhouse(session),
+				SDKMode:         cand.sdkMode,
+				ContractVersion: cand.contractVersion,
+				Session:         session,
+			}
+		}
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return wrapperDecision{}
-	}
-	var session map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&session); err != nil {
-		return wrapperDecision{}
-	}
-	return wrapperDecision{Answered: true, Inhouse: routeChargesInhouse(session), Session: session}
+	return wrapperDecision{}
 }
 
 func routeChargesInhouse(session map[string]any) bool {

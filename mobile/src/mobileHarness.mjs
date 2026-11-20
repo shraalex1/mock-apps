@@ -328,6 +328,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
             ...(req.headers['x-billing-sdk-version']
               ? { 'X-Billing-SDK-Version': req.headers['x-billing-sdk-version'] }
               : {}),
+            ...(req.headers['x-billing-sdk-mode']
+              ? { 'X-Billing-SDK-Mode': req.headers['x-billing-sdk-mode'] }
+              : {}),
           },
           body: req.method === 'GET' ? undefined : rawBody,
         });
@@ -338,6 +341,41 @@ if (import.meta.url === `file://${process.argv[1]}`) {
         const status = err && String(err.message) === 'payload_too_large' ? 413 : 502;
         res.writeHead(status, { ...MOBILE_SECURITY_HEADERS, 'Content-Type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify({ error: String(err), fallback: 'legacy_rc_offline_fallback' }));
+      }
+      return;
+    }
+
+    if (url === '/api/mobile/s2s-attest' && req.method === 'POST') {
+      try {
+        const rawBody = await readReqBody(req);
+        const parsed = rawBody ? JSON.parse(rawBody) : {};
+        const expectedMode = String(parsed.expected_operational_mode || '').trim();
+        const gwUrl = resolveAllowedGatewayUrl(parsed.target_gateway_url || req.headers['x-target-gateway-url']);
+        const payloadObj = { caller_service: 'shortical-mock-mobile-s2s-probe' };
+        if (expectedMode) payloadObj.expected_operational_mode = expectedMode;
+        const bodyStr = JSON.stringify(payloadObj);
+        const tsStr = String(Math.floor(Date.now() / 1000));
+        const bodyHash = crypto.createHash('sha256').update(bodyStr).digest('hex');
+        const sig = crypto
+          .createHmac('sha256', S2S_HMAC_SECRET)
+          .update(`${tsStr}.POST./api/v1/billing/s2s/mode-attestation.${bodyHash}`)
+          .digest('hex');
+        const gwRes = await fetch(`${gwUrl}/api/v1/billing/s2s/mode-attestation`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Billing-Timestamp': tsStr,
+            'X-Billing-Signature': sig,
+            ...(expectedMode ? { 'X-Billing-Expected-Operational-Mode': expectedMode } : {}),
+          },
+          body: bodyStr,
+        });
+        const text = await gwRes.text();
+        res.writeHead(gwRes.status, { ...MOBILE_SECURITY_HEADERS, 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(text);
+      } catch (err) {
+        res.writeHead(502, { ...MOBILE_SECURITY_HEADERS, 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ error: String(err) }));
       }
       return;
     }

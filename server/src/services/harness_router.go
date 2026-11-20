@@ -267,6 +267,59 @@ func (h *HarnessService) NewHarnessRouter() http.Handler {
 		writeJSON(w, status, out)
 	})
 
+	// 8. Pure-Pipe Scenario 1: api-service calls RevTiger POST /v1/receipts + GET /v1/subscribers/{app_user_id} for coin operations (Opaque SKU)
+	mux.HandleFunc("POST /api/v1/mock/rc-pipe/coins-verify", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			SubscriberRef           string  `json:"subscriber_ref"`
+			ProductID               string  `json:"product_id"`
+			Price                   float64 `json:"price"`
+			Currency                string  `json:"currency"`
+			Platform                string  `json:"platform"`
+			Brand                   string  `json:"brand"`
+			ExpectedOperationalMode string  `json:"expected_operational_mode"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		status, out, err := h.ExecuteRCPipeCoinVerify(req.SubscriberRef, req.ProductID, req.Currency, req.Platform, req.Brand, req.ExpectedOperationalMode, req.Price)
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, status, out)
+	})
+
+	// 9. Pure-Pipe Scenario 3: SDK Version-Mode Contract Handshake Tester (standalone_pure_pipe vs wrapper_mirror)
+	mux.HandleFunc("POST /api/v1/mock/sdk/mode-handshake", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			SubscriberRef   string `json:"subscriber_ref"`
+			Brand           string `json:"brand"`
+			SDKMode         string `json:"sdk_mode"`
+			ContractVersion string `json:"contract_version"`
+			ClientPlatform  string `json:"client_platform"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		status, out, err := h.ExecuteSDKModeHandshake(req.SubscriberRef, req.Brand, req.SDKMode, req.ContractVersion, req.ClientPlatform)
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, status, out)
+	})
+
+	// 10. Cross-System S2S Mode-Attestation Contract Tester (Source-of-Truth api-service <-> RevTiger)
+	mux.HandleFunc("POST /api/v1/mock/s2s/mode-attestation", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ExpectedOperationalMode string `json:"expected_operational_mode"`
+			TargetGatewayURL        string `json:"target_gateway_url"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		status, out, err := h.ExecuteS2SModeAttestation(req.ExpectedOperationalMode, req.TargetGatewayURL)
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, status, out)
+	})
+
 	mux.HandleFunc("GET /storefront", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'unsafe-inline'; object-src 'none'; frame-ancestors 'self'")
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -285,7 +338,7 @@ func (h *HarnessService) NewHarnessRouter() http.Handler {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Vary", "Origin")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Admin-Token, X-Billing-Timestamp, X-Billing-Signature, X-Billing-SDK-Version")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Admin-Token, X-Billing-Timestamp, X-Billing-Signature, X-Billing-SDK-Version, X-Billing-SDK-Mode")
 		}
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
@@ -351,11 +404,13 @@ func (h *HarnessService) ExecuteMobileHarnessFlow(req models.MobileHarnessSimula
 	}
 
 	verifyPayload := map[string]any{
-		"subscriber_ref": subRef,
-		"brand":          brand,
-		"provider":       provider,
-		"product_id":     prodID,
-		"offer_token":    req.OfferToken,
+		"subscriber_ref":   subRef,
+		"brand":            brand,
+		"provider":         provider,
+		"product_id":       prodID,
+		"offer_token":      req.OfferToken,
+		"sdk_mode":         route.SDKMode,
+		"contract_version": route.ContractVersion,
 	}
 
 	uniqueSuffix := fmt.Sprintf("%s_%d", subRef, time.Now().UnixMilli()%1000000)

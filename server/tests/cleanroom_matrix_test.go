@@ -139,6 +139,55 @@ func TestCleanRoomMockHarnessFaultInjectionAndWebhookUnlock(t *testing.T) {
 			})
 			return
 		}
+		if r.URL.Path == "/api/v1/billing/client/initialize" {
+			if body["sdk_mode"] == "wrapper_mirror" {
+				w.WriteHeader(http.StatusConflict)
+				_ = json.NewEncoder(w).Encode(map[string]any{"code": "sdk_mode_mismatch"})
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"mode":                  "test",
+				"operational_mode":      "pure_pipe",
+				"sdk_mode":              "standalone_pure_pipe",
+				"required_sdk_contract": "1.4.0-pure-pipe",
+				"sdk_mode_compatible":   true,
+				"routed_target":         "legacy_rc_with_shadow_mirror",
+				"mirror_to_test":        false,
+			})
+			return
+		}
+		if r.URL.Path == "/v1/receipts" {
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"request_date": "2026-11-19T00:00:00Z",
+				"subscriber": map[string]any{
+					"original_app_user_id": body["app_user_id"],
+					"non_subscriptions": map[string]any{
+						body["product_id"].(string): []any{map[string]any{"id": "tx_coin_pipe_01"}},
+					},
+				},
+			})
+			return
+		}
+		if r.URL.Path == "/v1/subscribers/uid_coin_pipe_buyer_01" {
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{"subscriber": map[string]any{"original_app_user_id": "uid_coin_pipe_buyer_01"}})
+			return
+		}
+		if r.URL.Path == "/api/v1/billing/s2s/mode-attestation" {
+			exp, _ := body["expected_operational_mode"].(string)
+			w.Header().Set("X-Billing-Operational-Mode", "pure_pipe")
+			w.Header().Set("X-Billing-Required-SDK-Contract", "1.4.0-pure-pipe")
+			if exp != "" && exp != "pure_pipe" {
+				w.WriteHeader(http.StatusConflict)
+				_ = json.NewEncoder(w).Encode(map[string]any{"code": "s2s_operational_mode_mismatch"})
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{"attested": true, "operational_mode": "pure_pipe"})
+			return
+		}
 		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer mockGateway.Close()
@@ -202,6 +251,57 @@ func TestCleanRoomMockHarnessFaultInjectionAndWebhookUnlock(t *testing.T) {
 	if mobRes.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200 OK from mobile harness simulation, got %d", mobRes.StatusCode)
 	}
+
+	// Pure-Pipe Scenario 1: POST /api/v1/mock/rc-pipe/coins-verify -> 200 OK + +100 coins in mock wallet
+	coinPipeBody, _ := json.Marshal(map[string]any{
+		"subscriber_ref": "uid_coin_pipe_buyer_01",
+		"product_id":     "com.shortical.coins.unmapped_pack_9999",
+		"price":          19.99,
+		"currency":       "USD",
+		"platform":       "android",
+	})
+	coinPipeRes, err := http.Post(tsGW.URL+"/api/v1/mock/rc-pipe/coins-verify", "application/json", bytes.NewReader(coinPipeBody))
+	if err != nil {
+		t.Fatalf("coinPipeRes failed: %v", err)
+	}
+	defer coinPipeRes.Body.Close()
+	if coinPipeRes.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK from /api/v1/mock/rc-pipe/coins-verify, got %d", coinPipeRes.StatusCode)
+	}
+
+	// Pure-Pipe Scenario 3: POST /api/v1/mock/sdk/mode-handshake -> 200 OK for standalone_pure_pipe, 409 for wrapper_mirror
+	hsOKBody, _ := json.Marshal(map[string]any{"sdk_mode": "standalone_pure_pipe", "contract_version": "1.4.0-pure-pipe"})
+	hsOKRes, err := http.Post(tsGW.URL+"/api/v1/mock/sdk/mode-handshake", "application/json", bytes.NewReader(hsOKBody))
+	if err != nil || hsOKRes.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK from standalone_pure_pipe handshake, got err=%v status=%d", err, hsOKRes.StatusCode)
+	}
+	_ = hsOKRes.Body.Close()
+
+	hs409Body, _ := json.Marshal(map[string]any{"sdk_mode": "wrapper_mirror", "contract_version": "1.4.0-wrapper"})
+	hs409Res, err := http.Post(tsGW.URL+"/api/v1/mock/sdk/mode-handshake", "application/json", bytes.NewReader(hs409Body))
+	if err != nil || hs409Res.StatusCode != http.StatusConflict {
+		t.Fatalf("expected 409 Conflict from wrapper_mirror handshake against pure_pipe server, got err=%v status=%d", err, hs409Res.StatusCode)
+	}
+	_ = hs409Res.Body.Close()
+
+	// Cross-System S2S Mode-Attestation Contract: Sent=pure_pipe (200), Sent=full_platform (409), Omitted="" (200)
+	attOK, _ := http.Post(tsGW.URL+"/api/v1/mock/s2s/mode-attestation", "application/json", bytes.NewReader([]byte(`{"expected_operational_mode":"pure_pipe"}`)))
+	if attOK.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK on S2S mode attestation match, got %d", attOK.StatusCode)
+	}
+	_ = attOK.Body.Close()
+
+	att409, _ := http.Post(tsGW.URL+"/api/v1/mock/s2s/mode-attestation", "application/json", bytes.NewReader([]byte(`{"expected_operational_mode":"full_platform"}`)))
+	if att409.StatusCode != http.StatusConflict {
+		t.Fatalf("expected 409 Conflict on S2S mode attestation mismatch, got %d", att409.StatusCode)
+	}
+	_ = att409.Body.Close()
+
+	attOmit, _ := http.Post(tsGW.URL+"/api/v1/mock/s2s/mode-attestation", "application/json", bytes.NewReader([]byte(`{}`)))
+	if attOmit.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK when S2S mode attestation is omitted, got %d", attOmit.StatusCode)
+	}
+	_ = attOmit.Body.Close()
 
 	// Verify /healthz and /storefront
 	hzRes, err := http.Get(tsGW.URL + "/healthz")

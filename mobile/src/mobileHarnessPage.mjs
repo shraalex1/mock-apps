@@ -138,17 +138,26 @@ export function renderMobileHarnessPage(gatewayUrl = GATEWAY_URL, mockServerUrl 
         </select>
       </div>
       <div class="row">
-        <button id="btn-init">1. Initialize KMP SDK</button>
+        <select id="sdk-mode-select">
+          <option value="standalone_pure_pipe">Pure-Pipe Standalone SDK (standalone_pure_pipe • v1.4.0-pure-pipe)</option>
+          <option value="wrapper_mirror">Full-Platform Wrapper SDK (wrapper_mirror • v1.4.0)</option>
+        </select>
+      </div>
+      <div class="row">
+        <button id="btn-init">1. Initialize KMP SDK (Mode Guard)</button>
         <button id="btn-wallet" class="secondary">Check VIP / Wallet (:4470)</button>
       </div>
     </div>
 
     <div class="section">
-      <h2>2. StoreKit 2 JWS &amp; Play Billing v8 Purchase</h2>
-      <p>Signs a sandbox StoreKit 2 JWS receipt or Play v8 token, verifies with Gateway (:4460), and unlocks episode on Mock Server (:4470).</p>
+      <h2>2. StoreKit 2 JWS, Play v8 &amp; Opaque Coin SKU</h2>
+      <p>Signs a sandbox StoreKit 2 JWS receipt or Play v8 token (including arbitrary unmapped coin SKUs in Pure-Pipe mode), verifies with Gateway (:4460), and unlocks episode on Mock Server (:4470).</p>
       <div class="row">
         <button id="btn-buy-ios">Buy iOS StoreKit 2 GOLD ($19.99)</button>
         <button id="btn-buy-android">Buy Android Play v8 VIP ($9.99)</button>
+      </div>
+      <div class="row">
+        <button id="btn-buy-opaque-coin" class="green">Buy Unmapped Opaque Coin Pack ($14.99)</button>
       </div>
     </div>
 
@@ -159,6 +168,11 @@ export function renderMobileHarnessPage(gatewayUrl = GATEWAY_URL, mockServerUrl 
         <button id="btn-mirror" class="green">Send mirror_to_test Snapshot</button>
         <button id="btn-restore-ok" class="secondary">Restore (Owner 200)</button>
         <button id="btn-restore-409" class="secondary">Restore (Hijack 409)</button>
+      </div>
+      <div class="row">
+        <button id="btn-s2s-attest-ok" class="green">S2S Attest: pure_pipe</button>
+        <button id="btn-s2s-attest-mismatch" class="secondary">S2S Attest: full_platform (409)</button>
+        <button id="btn-s2s-attest-omit" class="secondary">S2S Attest: Omitted</button>
       </div>
     </div>
 
@@ -202,13 +216,27 @@ export function renderMobileHarnessPage(gatewayUrl = GATEWAY_URL, mockServerUrl 
 
     document.getElementById('btn-init').onclick = async () => {
       const sub = subInput.value.trim() || 'uid_mobile_emu_01';
+      const sdkMode = document.getElementById('sdk-mode-select')?.value || 'standalone_pure_pipe';
+      const contractVersion = sdkMode === 'standalone_pure_pipe' ? '1.4.0-pure-pipe' : '1.4.0';
       try {
         const res = await fetch('/proxy/gateway/api/v1/billing/client/initialize', {
           method: 'POST',
-          headers: { ...activeGwHeader(), 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sub, 'X-Billing-SDK-Version': '1.4.0' },
-          body: JSON.stringify({ subscriber_ref: sub, brand: 'Shortical', contract_version: '1.4.0', client_platform: platSelect.value })
+          headers: {
+            ...activeGwHeader(),
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + sub,
+            'X-Billing-SDK-Mode': sdkMode,
+            'X-Billing-SDK-Version': contractVersion
+          },
+          body: JSON.stringify({
+            subscriber_ref: sub,
+            brand: 'Shortical',
+            sdk_mode: sdkMode,
+            contract_version: contractVersion,
+            client_platform: platSelect.value
+          })
         });
-        logResult('Initialize KMP SDK', res.status, await res.json());
+        logResult('Initialize KMP SDK (' + sdkMode + ' • ' + contractVersion + ')', res.status, await res.json());
       } catch (e) {
         logResult('Initialize Offline Fallback', 0, { error: String(e), fallback: 'legacy_rc_offline_fallback' });
       }
@@ -249,6 +277,27 @@ export function renderMobileHarnessPage(gatewayUrl = GATEWAY_URL, mockServerUrl 
         logResult('Android Play Billing v8 Verified', res.status, await res.json());
       } catch (e) {
         logResult('Android Purchase Error', 0, { error: String(e) });
+      }
+    };
+
+    document.getElementById('btn-buy-opaque-coin').onclick = async () => {
+      const sub = subInput.value.trim() || 'uid_mobile_emu_01';
+      const prov = platSelect.value === 'ios' ? 'apple' : 'google';
+      try {
+        const res = await fetch('/api/mobile/simulate', {
+          method: 'POST',
+          headers: { ...activeGwHeader(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            subscriber_ref: sub,
+            brand: 'Shortical',
+            provider: prov,
+            product_id: 'com.shortical.coins.unmapped_pack_777',
+            target_gateway_url: envSelect.value
+          })
+        });
+        logResult('Pure-Pipe Unmapped Opaque Coin SKU Verified (' + prov + ')', res.status, await res.json());
+      } catch (e) {
+        logResult('Opaque Coin Purchase Error', 0, { error: String(e) });
       }
     };
 
@@ -310,6 +359,26 @@ export function renderMobileHarnessPage(gatewayUrl = GATEWAY_URL, mockServerUrl 
         logResult('Restore Error', 0, { error: String(e) });
       }
     };
+
+    async function runMobileS2SAttest(expectedMode, label) {
+      try {
+        const res = await fetch('/api/mobile/s2s-attest', {
+          method: 'POST',
+          headers: { ...activeGwHeader(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ expected_operational_mode: expectedMode, target_gateway_url: envSelect.value })
+        });
+        logResult(label, res.status, await res.json());
+      } catch (e) {
+        logResult('S2S Attest Error', 0, { error: String(e) });
+      }
+    }
+
+    document.getElementById('btn-s2s-attest-ok').onclick = () =>
+      runMobileS2SAttest('pure_pipe', 'S2S Mode Attestation (Sent expected=pure_pipe)');
+    document.getElementById('btn-s2s-attest-mismatch').onclick = () =>
+      runMobileS2SAttest('full_platform', 'S2S Mode Attestation (Sent expected=full_platform)');
+    document.getElementById('btn-s2s-attest-omit').onclick = () =>
+      runMobileS2SAttest('', 'S2S Mode Attestation (Omitted -> Passive Discovery)');
   </script>
 </body>
 </html>`;

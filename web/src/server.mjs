@@ -84,6 +84,17 @@ export function renderStorefrontPage(
       <button id="btn-send-pubsub" class="secondary">Send Google RTDN Push to Gateway</button>
       <button id="btn-copy-pubsub" class="secondary">Copy Google Pub/Sub RTDN JSON</button>
     </div>
+    <div class="card">
+      <h3 style="margin-top:0;">4. Pure-Pipe Mode: Opaque Coin Pipe (/v1/receipts), SDK Mode Guard &amp; S2S Mode Attestation</h3>
+      <p style="font-size:12px;color:#cbd5e1;">Tests Scenario 1 (<code>api-service -&gt; RevTiger POST /v1/receipts</code> with an unmapped opaque coin SKU), Scenario 3 (<code>standalone_pure_pipe</code> vs <code>wrapper_mirror</code> SDK Guard), and the <strong>Cross-System S2S Mode-Attestation Contract</strong> (when sent vs omitted by source-of-truth <code>api-service</code>).</p>
+      <input id="pure-pipe-coin-sku" value="com.shortical.coins.unmapped_pack_9999" placeholder="Opaque Coin SKU string (no catalog pre-import needed in pure_pipe mode)" />
+      <button id="btn-rc-coin-pipe" class="green">Verify Opaque Coin SKU (POST /v1/receipts)</button>
+      <button id="btn-sdk-pure-pipe">Handshake Pure-Pipe Standalone SDK</button>
+      <button id="btn-sdk-wrapper" class="secondary">Handshake Wrapper SDK (Test 409 Guard)</button>
+      <button id="btn-s2s-attest-pure" class="green">S2S Attest: Expect pure_pipe</button>
+      <button id="btn-s2s-attest-full" class="secondary">S2S Attest: Expect full_platform (Test 409)</button>
+      <button id="btn-s2s-attest-omitted" class="secondary">S2S Attest: Omitted (Passive 200)</button>
+    </div>
   </div>
   <pre id="web-out">Ready. Click any button above to run a live E2E request against Mock Server (${mockServerUrl}) &amp; Gateway (${gatewayUrl}).</pre>
   <script>
@@ -375,6 +386,74 @@ export function renderStorefrontPage(
       }
       show('Copied Google Cloud Pub/Sub RTDN Message Body (Paste into Topic -> Messages -> Publish message)', 200, JSON.parse(PUBSUB_RTDN_JSON));
     };
+
+    document.getElementById('btn-rc-coin-pipe').onclick = async () => {
+      const sku = (document.getElementById('pure-pipe-coin-sku')?.value || 'com.shortical.coins.unmapped_pack_9999').trim();
+      try {
+        const res = await fetch(MOCK_SRV + '/api/v1/mock/rc-pipe/coins-verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            subscriber_ref: 'uid_coin_pipe_buyer_01',
+            product_id: sku,
+            price: 19.99,
+            currency: 'USD',
+            platform: 'android',
+            brand: 'Shortical'
+          })
+        });
+        show('Scenario 1: api-service -> RevTiger POST /v1/receipts + GET /v1/subscribers (Opaque Coin SKU)', res.status, await res.json());
+      } catch (e) {
+        show('Coin Pipe Error', 500, { error: String(e) });
+      }
+    };
+
+    async function testSdkModeHandshake(sdkMode, contractVersion, label) {
+      try {
+        const res = await fetch(MOCK_SRV + '/api/v1/mock/sdk/mode-handshake', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            subscriber_ref: 'uid_sdk_mode_probe_01',
+            brand: 'Shortical',
+            sdk_mode: sdkMode,
+            contract_version: contractVersion,
+            client_platform: 'web'
+          })
+        });
+        show(label, res.status, await res.json());
+      } catch (e) {
+        show(label + ' Error', 500, { error: String(e) });
+      }
+    }
+
+    document.getElementById('btn-sdk-pure-pipe').onclick = () =>
+      testSdkModeHandshake('standalone_pure_pipe', '1.4.0-pure-pipe', 'Pure-Pipe Standalone SDK Handshake (standalone_pure_pipe • v1.4.0-pure-pipe)');
+
+    document.getElementById('btn-sdk-wrapper').onclick = () =>
+      testSdkModeHandshake('wrapper_mirror', '1.4.0-wrapper', 'Wrapper SDK Handshake (wrapper_mirror • v1.4.0-wrapper)');
+
+    async function testS2SModeAttestation(expectedMode, label) {
+      try {
+        const res = await fetch(MOCK_SRV + '/api/v1/mock/s2s/mode-attestation', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ expected_operational_mode: expectedMode })
+        });
+        show(label, res.status, await res.json());
+      } catch (e) {
+        show(label + ' Error', 500, { error: String(e) });
+      }
+    }
+
+    document.getElementById('btn-s2s-attest-pure').onclick = () =>
+      testS2SModeAttestation('pure_pipe', 'S2S Source-of-Truth Mode Attestation (Sent expected_operational_mode=pure_pipe)');
+
+    document.getElementById('btn-s2s-attest-full').onclick = () =>
+      testS2SModeAttestation('full_platform', 'S2S Source-of-Truth Mode Attestation (Sent expected_operational_mode=full_platform)');
+
+    document.getElementById('btn-s2s-attest-omitted').onclick = () =>
+      testS2SModeAttestation('', 'S2S Source-of-Truth Mode Attestation (Omitted / Not Sent -> Passive Discovery)');
   </script>
 </body>
 </html>`;
